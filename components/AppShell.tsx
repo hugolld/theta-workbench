@@ -21,6 +21,7 @@ import { AgentSessionPanel } from "./AgentSessionPanel";
 import { DebugPanel, DebugPanelBoundary } from "./DebugPanel";
 import { SessionChatPanel } from "./SessionChatPanel";
 import { TerminalPanel } from "./TerminalPanel";
+import { NotebookPanel } from "./NotebookPanel";
 import { newTerminalTab, restoreTerminalTabs, TERMINAL_TABS_KEY, type TerminalTab } from "./terminal-tab-state";
 import { appendSideTab, restoreSideTabs, sideTabsKey } from "./side-tab-state";
 import { useTheme } from "@/hooks/useTheme";
@@ -597,6 +598,9 @@ export function AppShell() {
   const fileWorkspaceGenerationRef = useRef(0);
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [terminalsRestored, setTerminalsRestored] = useState(false);
+  // Notebook tabs: one per project whose pane was opened (M7b-1 #3); like a
+  // terminal's, a pane stays open across workspace switches until closed.
+  const [notebookTabs, setNotebookTabs] = useState<{ cwd: string }[]>([]);
   // Subagent tabs remain open within a project; side tabs follow their main session.
   const [agentTabs, setAgentTabs] = useState<{ sessionId: string; label: string; side?: boolean }[]>([]);
   const sideTabOwnerRef = useRef<string | null>(null);
@@ -624,6 +628,12 @@ export function AppShell() {
         kind: (tab.side ? "side" : "agent") as "agent" | "side",
       };
     }),
+    ...notebookTabs.map((tab) => ({
+      id: `notebook:${tab.cwd}`,
+      label: getFileName(tab.cwd) || tab.cwd,
+      filePath: tab.cwd,
+      kind: "notebook" as const,
+    })),
   ], panelTabOrder);
   // A closed tab leaves the saved order, so reopening it appends it like any new tab.
   const panelTabIds = panelTabs.map((tab) => tab.id).join("\n");
@@ -1355,6 +1365,15 @@ export function AppShell() {
     if (isMobile) setSidebarOpen(false);
   }, [terminalTabs, isMobile]);
 
+  // The project notebook pane (M7b-1 #3): a right-panel tab keyed by the
+  // project root, opened from the project group's menu like a terminal's.
+  const handleOpenNotebook = useCallback((cwd: string) => {
+    setNotebookTabs((tabs) => tabs.some((tab) => tab.cwd === cwd) ? tabs : [...tabs, { cwd }]);
+    setActiveFileTabId(`notebook:${cwd}`);
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
   // Subagent work opens in a right-panel tab instead of hijacking the main chat.
   const handleOpenSubagentTab = useCallback((sessionId: string, label: string, side?: boolean) => {
     setAgentTabs((prev) => prev.some((tab) => tab.sessionId === sessionId)
@@ -1461,6 +1480,16 @@ export function AppShell() {
       if (fileTabs.length === 0 && terminalTabs.length === 0 && remainingAgents.length === 0) setRightPanelOpen(false);
       return;
     }
+    if (tabId.startsWith("notebook:")) {
+      const remainingNotebooks = notebookTabs.filter((tab) => `notebook:${tab.cwd}` !== tabId);
+      setNotebookTabs(remainingNotebooks);
+      setActiveFileTabId((cur) => {
+        if (cur !== tabId) return cur;
+        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(agentTabs);
+      });
+      if (fileTabs.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0 && remainingNotebooks.length === 0) setRightPanelOpen(false);
+      return;
+    }
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
       if (next.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0) setRightPanelOpen(false);
@@ -1471,7 +1500,7 @@ export function AppShell() {
       const remaining = fileTabs.filter((t) => t.id !== tabId);
       return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(agentTabs);
     });
-  }, [fileTabs, terminalTabs, agentTabs]);
+  }, [fileTabs, terminalTabs, agentTabs, notebookTabs]);
 
   // An extension's ctx.shutdown() ended the session's runtime, as pi quits: leave it the
   // way a deleted session is left (the refreshed list shows whether its file remains).
@@ -1646,6 +1675,8 @@ export function AppShell() {
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
   // Subagent work tabs: like files, only the active one is mounted.
   const activeAgentTab = agentTabs.find((tab) => `agent:${tab.sessionId}` === activeFileTabId) ?? null;
+  // The project notebook pane (M7b-1 #3): like terminals, one mounted tab per project.
+  const activeNotebookTab = notebookTabs.find((tab) => `notebook:${tab.cwd}` === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -1679,6 +1710,7 @@ export function AppShell() {
         onCwdChange={handleCwdChange}
         onOpenFile={handleOpenFile}
         onOpenTerminal={handleOpenTerminal}
+        onOpenNotebook={handleOpenNotebook}
         explorerRefreshKey={explorerRefreshKey}
         onExplorerRefresh={handleExplorerRefresh}
         onAtMention={handleAtMention}
@@ -3092,11 +3124,14 @@ export function AppShell() {
                 { sourceSessionId: activeFileTab.sourceSessionId, page },
               )}
             />
-          ) : !terminalTabs.some((tab) => tab.id === activeFileTabId) && !activeAgentTab ? (
+          ) : !terminalTabs.some((tab) => tab.id === activeFileTabId) && !activeAgentTab && !activeNotebookTab ? (
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
                {translate("files.noneOpen")}
             </div>
           ) : null}
+          {activeNotebookTab && (
+            <NotebookPanel key={activeNotebookTab.cwd} cwd={activeNotebookTab.cwd} />
+          )}
           {terminalTabs.map((tab) => (
             <div key={tab.id} hidden={tab.id !== activeFileTabId} style={{ width: "100%", height: "100%" }}>
               <TerminalPanel

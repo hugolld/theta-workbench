@@ -114,6 +114,7 @@ import {
   ChangesIcon,
   CheckIcon,
   ChevronIcon,
+  BookIcon,
   DotIcon,
   DotOutlineIcon,
   EyeIcon,
@@ -241,6 +242,8 @@ interface Props {
   ) => void;
   onOpenFile?: (filePath: string, fileName: string, options?: { sourceSessionId?: string | null; modeHint?: "diff" }) => void;
   onOpenTerminal?: (cwd: string) => void;
+  /** The project's notebook pane, a right-panel tab (M7b-1 #3). */
+  onOpenNotebook?: (cwd: string) => void;
   explorerRefreshKey?: number;
   onExplorerRefresh?: () => void;
   onAtMention?: (relativePath: string, isDir: boolean) => void;
@@ -516,7 +519,7 @@ function buttonAnchor(element: HTMLElement, align: "start" | "end"): SidebarMenu
   return { kind: "rect", rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, align };
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSideChat, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSideChat, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, onOpenNotebook, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
@@ -2596,6 +2599,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
         icon: <OpenInNewTabIcon />,
         shortcut: "T",
         onSelect: () => openProjectInNewTab(project),
+      },
+      {
+        // The project notebook pane (M7b-1 #3): shown only when the callback
+        // is wired — like the terminal, the pane is an app-shell surface.
+        type: "item",
+        id: "open-notebook",
+        label: t("sidebar.openNotebook"),
+        icon: <BookIcon />,
+        onSelect: () => onOpenNotebook?.(project.root),
       },
       { type: "separator", id: "separator-layout" },
       {
