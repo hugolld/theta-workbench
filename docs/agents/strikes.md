@@ -32,7 +32,7 @@ offender named; exit 2 is a usage or tracker error. The legs:
 | Evidence freshness | The PR body attests `clean <sha>` at any SHA but HEAD. Evidence goes stale on the next commit — recapture the pair, never re-bind the words. |
 | Review coverage | A ready PR's commits are not all covered by `reviewed: <base>..<head>` lines (hex shas, base exclusive; a lone sha names one commit). One bare line per round in the body; markdown decoration counts as nothing. Draft PRs skip this leg. |
 | Spec close | A ready PR's body lacks a closing keyword for its spec (`Closes #<spec>`). Draft PRs skip this leg. |
-| CI green | Any check `gh pr checks` reports is not passing — pending included. |
+| CI green | Any check `gh pr checks` reports is not passing — pending included. The leg protects checks that exist: until the fork's Actions workflows are enabled (a one-time owner act in the GitHub UI — they ship with the upstream history but never registered on this fork), `gh pr checks` reports none and this leg skips with a note; the fail/pending parsing is pinned in `scripts/check-strike.test.mjs`. |
 
 The branch base is the PR's own base branch (`origin/<base>`, falling back
 to the local branch), so coverage and the child walk read exactly the
