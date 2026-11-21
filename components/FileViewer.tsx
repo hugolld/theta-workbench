@@ -9,6 +9,7 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { useTheme } from "@/hooks/useTheme";
 import { usePrismLanguages } from "@/hooks/usePrismLanguages";
+import { useWatchRecovery } from "@/hooks/useWatchRecovery";
 import {
   DOCX_PREVIEW_MAX_BYTES,
   HTML_PREVIEW_MAX_BYTES,
@@ -19,7 +20,7 @@ import {
   isVideoPath,
 } from "@/lib/file-types";
 import { encodeFilePathForApi, getFileDirectory, getFileName, getRelativeFilePath } from "@/lib/file-paths";
-import { FILE_WATCH_HEARTBEAT_MS, fileVersion, fileVersionChanged } from "@/lib/file-version";
+import { fileVersion, fileVersionChanged } from "@/lib/file-version";
 import { injectSandboxedHtmlPolyfill } from "@/lib/html-sandbox-polyfill";
 import { HIDDEN_PAGE_GRACE_MS, usePageHiddenFor } from "@/hooks/usePageHidden";
 import { pageId, trackEventSource } from "@/lib/page-debug";
@@ -283,36 +284,8 @@ function usePreviewUrl(filePath: string, type: "read" | "preview", sourceSession
   return useMemo(() => getFileApiUrl(filePath, type, sourceSessionId, { v: ++previewLoads }), [filePath, type, sourceSessionId, bust]);
 }
 
-/**
- * Keeps a viewer's file watch alive. The browser never retries an EventSource
- * whose reconnect got an HTTP error (a proxy's 502 while pi-web restarts), and a
- * half-open connection (sleep, a dropped NAT entry) goes quiet without one.
- * Either way the viewer opens a new watch; its `connected` reads the file again
- * if it changed meanwhile.
- */
-function useWatchRecovery(): [number, (es: EventSource) => () => void] {
-  const [attempt, setAttempt] = useState(0);
-  const failures = useRef(0);
-  const supervise = useCallback((es: EventSource) => {
-    let stale: ReturnType<typeof setTimeout> | undefined;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    const reopen = () => {
-      clearTimeout(stale);
-      es.close();
-      retry ??= setTimeout(() => setAttempt((n) => n + 1), Math.min(1000 * 2 ** failures.current++, FILE_WATCH_HEARTBEAT_MS));
-    };
-    const alive = () => {
-      clearTimeout(stale);
-      stale = setTimeout(reopen, FILE_WATCH_HEARTBEAT_MS * 2.5);
-    };
-    es.addEventListener("connected", () => { failures.current = 0; });
-    for (const name of ["connected", "change", "ping"]) es.addEventListener(name, alive);
-    es.addEventListener("error", () => { if (es.readyState === EventSource.CLOSED) reopen(); });
-    alive();
-    return () => { clearTimeout(stale); clearTimeout(retry); };
-  }, []);
-  return [attempt, supervise];
-}
+// The watch-alive supervision (useWatchRecovery) moved to hooks/ in
+// ticket #4: the notebook pane's live tail is its second caller.
 
 function DownloadLink({ filePath, sourceSessionId }: { filePath: string; sourceSessionId?: string | null }) {
   const { t } = useI18n();
