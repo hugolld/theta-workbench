@@ -34,20 +34,35 @@ function request(cwd) {
 }
 
 test("reads the project's notebook once and serves the view-model", async () => {
-  writeNotebook([
+  const raw = [
     JSON.stringify({ id: "hyp-1", type: "hypothesis", date: "2026-11-18", text: "Compound X lowers IC50", evidence: [{ source: "pubmed", retrieved: "2026-11-18", grade: "asserted" }] }),
     "not json at all",
     JSON.stringify({ id: "obs-1", type: "observation", date: "2026-11-19", text: "Top hit binds", grade: "cross-checked", evidence: [{ source: "pubmed", retrieved: "2026-11-19", grade: "cross-checked" }] }),
-  ]);
+  ];
+  writeNotebook(raw);
   allowFileRoot(project);
   const response = await request(project);
   assert.equal(response.status, 200);
-  const { notebook } = await response.json();
+  const { notebook, lines } = await response.json();
   // The malformed line never renders; the grammar renders what is left.
   assert.equal(notebook.header.entryCount, 2);
   assert.equal(notebook.header.text, "Theta notebook - 2 entries - grades: 1 asserted, 2 cross-checked");
   assert.deepEqual(notebook.entries.map((entry) => entry.id), ["hyp-1", "obs-1"]);
   assert.equal(notebook.entries[1].rowText, "[cross-checked] Top hit binds");
+  // The pane's live buffer starts from the same bytes (ticket #4): the
+  // complete lines raw, malformed included — the render gate judges them.
+  assert.deepEqual(lines, raw);
+});
+
+test("a torn write rides no line in the GET handover", async () => {
+  const complete = JSON.stringify({ id: "mth-1", type: "method", date: "2026-11-18", text: "Torn tail check" });
+  fs.mkdirSync(path.join(project, ".theta"), { recursive: true });
+  // The trailing segment carries no newline — a write still in flight.
+  fs.writeFileSync(path.join(project, ".theta", "notebook.jsonl"), `${complete}\n{"id":"obs-9","type":"observ`);
+  const response = await request(project);
+  assert.equal(response.status, 200);
+  const { lines } = await response.json();
+  assert.deepEqual(lines, [complete]);
 });
 
 test("a project without a notebook is an absence, never an error", async () => {

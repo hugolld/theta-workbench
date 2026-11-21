@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
-import type { NotebookViewModel } from "@/lib/notebook";
+import { NOTEBOOK_LIVENESS_EVENTS, useWatchRecovery } from "@/hooks/useWatchRecovery";
+import { notebookViewModel, type NotebookViewModel } from "@/lib/notebook";
+import { createNotebookLive } from "@/lib/notebook-live";
 
 /**
- * The notebook pane (M7b-1 ticket #3): the research project's notebook
+ * The notebook pane (M7b-1 tickets #3–#4): the research project's notebook
  * drawn whole in theta-agent's `/notebook` grammar — the grammar's bytes
  * come from `lib/notebook.ts`, this surface only draws them. A project
  * view, unlike the TUI's per-session cards: every pre-existing entry
@@ -14,8 +16,14 @@ import type { NotebookViewModel } from "@/lib/notebook";
  * the notebook; recording stays in the loop's recorder. Evidence items
  * are grade-badged lines; the retrieval detail (and the snapshot
  * reference) sits behind an expand, so the trail reads at a glance and
- * the provenance is one click away. Liveness is ticket #4 — until then
- * the header's refresh re-reads the file.
+ * the provenance is one click away.
+ *
+ * Liveness (ticket #4): one watch stream per open pane. The stream hands
+ * over the appended lines' bytes; the pane appends them to its buffer of
+ * raw lines and re-derives the view-model through the grammar's gate —
+ * no reload, whichever session appended the lines, malformed lines never
+ * rendering and re-sent lines deduping by their bytes. A `reset` (the
+ * file rewritten under the stream) re-reads the whole notebook.
  */
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
@@ -163,34 +171,95 @@ interface Props {
   cwd: string;
 }
 
-/** The pane: one fetch per project cwd (re-read on refresh), the grammar drawn whole. */
+/** The pane: one fetch per project cwd, the grammar drawn whole — and, from ticket #4 on, live. */
 export function NotebookPanel({ cwd }: Props) {
   const { t } = useI18n();
   const [notebook, setNotebook] = useState<NotebookViewModel | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/notebook?cwd=${encodeURIComponent(cwd)}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json() as { notebook: NotebookViewModel | null };
-      setNotebook(body.notebook ?? null);
-      setFailed(false);
-    } catch {
-      setNotebook(null);
-      setFailed(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [cwd]);
+  // The live buffer: the notebook's complete lines as raw bytes. The watch
+  // stream appends to it and the view-model re-derives through the same
+  // gate the initial fetch drew from, so a delta can never disagree with
+  // the picture it amends. A failed read stays failed until a load
+  // succeeds — a delta never papers over it.
+  const linesRef = useRef<string[]>([]);
+  const [watchAttempt, superviseWatch] = useWatchRecovery(NOTEBOOK_LIVENESS_EVENTS);
+  // Loads and deltas reconcile in the controller (lib/notebook-live.ts,
+  // pinned at that seam): a delta invalidates any read in flight — the file
+  // moved under it, its snapshot is stale, and applying it would erase the
+  // merged line — so the read re-runs instead; a newer load supersedes an
+  // older one's response. Without this, a GET landing after an append
+  // frame would wipe the merged lines. ONE controller for the pane's
+  // lifetime, the cwd supplied through a getter read at each read's start:
+  // per-cwd controllers would carry their own supersession counters, and a
+  // project switch would let the orphaned controller's read apply the old
+  // project's notebook under the new selection.
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
+  const live = useMemo(() => createNotebookLive(
+    {
+      get cwd() { return cwdRef.current; },
+      fetchSnapshot: async (projectRoot) => {
+        const response = await fetch(`/api/notebook?cwd=${encodeURIComponent(projectRoot)}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return (await response.json()) as { notebook: NotebookViewModel | null; lines: unknown };
+      },
+    },
+    {
+      onLoading: setLoading,
+      onSnapshot: (snapshot) => {
+        linesRef.current = snapshot.lines;
+        setNotebook(snapshot.notebook);
+        setFailed(false);
+      },
+      onDelta: (lines) => {
+        linesRef.current.push(...lines);
+        setNotebook(notebookViewModel(`${linesRef.current.join("\n")}\n`));
+      },
+      onError: () => {
+        setNotebook(null);
+        setFailed(true);
+      },
+    },
+  ), []);
 
   useEffect(() => {
     setExpanded(new Set());
-    void load();
-  }, [load]);
+    live.load().catch(() => { /* the host already drew the failure */ });
+  }, [cwd, live]);
+
+  // The live tail (ticket #4): the stream's deltas are the appended lines'
+  // bytes — the pane merges them into its buffer and re-derives, whichever
+  // session appended them, with no reload. Line bytes are the identity, so
+  // a line the pane already holds renders once however often it is
+  // re-sent. `connected` (the open, and every reconnect after sleep or a
+  // dropped stream) and `reset` (the file rewritten under the stream) read
+  // the whole notebook again: whatever rode in while the stream was gone
+  // or unreadable reconciles there, never through a missed delta.
+  useEffect(() => {
+    const es = new EventSource(`/api/notebook/watch?cwd=${encodeURIComponent(cwd)}`);
+    const stopSupervising = superviseWatch(es);
+    es.addEventListener("append", (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent).data) as { lines?: unknown };
+        if (!Array.isArray(data.lines)) return;
+        live.delta(data.lines);
+      } catch {
+        // a malformed frame is no delta
+      }
+    });
+    es.addEventListener("connected", () => {
+      live.load().catch(() => { /* the host already drew the failure */ });
+    });
+    es.addEventListener("reset", () => {
+      live.load().catch(() => { /* the host already drew the failure */ });
+    });
+    return () => {
+      es.close();
+      stopSupervising();
+    };
+  }, [cwd, watchAttempt, superviseWatch, live]);
 
   const toggleEvidence = useCallback((key: string) => {
     setExpanded((current) => {
@@ -208,7 +277,7 @@ export function NotebookPanel({ cwd }: Props) {
       loading={loading}
       expanded={expanded}
       onToggleEvidence={toggleEvidence}
-      onRefresh={() => void load()}
+      onRefresh={() => { live.load().catch(() => { /* the host already drew the failure */ }); }}
       t={t}
     />
   );
