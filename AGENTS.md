@@ -76,6 +76,8 @@ app/api/
   open-in-explorer/route.ts        GET availability | POST open a cwd in the OS file manager (loopback only)
   files/[...path]/route.ts         GET ?type=list|read|download|meta|preview|watch | POST ?type=upload|upload-check|allow-link
   file-index/route.ts              GET file list for @-mentions
+  notebook/route.ts                GET ?cwd= the project notebook's view-model (+ its complete lines raw)
+  notebook/watch/route.ts          GET ?cwd= SSE of the notebook's appended lines (connected/append/reset/ping)
   git/status/route.ts              GET changed files for a cwd
   git/diff/route.ts                GET diff of one changed file
   worktrees/route.ts               GET/POST/DELETE git worktrees
@@ -163,7 +165,7 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 
 <!-- BEGIN:nextjs-agent-rules -->
 
-# This is NOT the Next.js you know
+## This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
 
