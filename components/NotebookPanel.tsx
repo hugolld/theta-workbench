@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { NOTEBOOK_LIVENESS_EVENTS, useWatchRecovery } from "@/hooks/useWatchRecovery";
 import { notebookViewModel, type NotebookViewModel } from "@/lib/notebook";
+import { createNotebookLive } from "@/lib/notebook-live";
 
 /**
  * The notebook pane (M7b-1 tickets #3–#4): the research project's notebook
@@ -183,46 +184,44 @@ export function NotebookPanel({ cwd }: Props) {
   // the picture it amends. A failed read stays failed until a load
   // succeeds — a delta never papers over it.
   const linesRef = useRef<string[]>([]);
-  // Loads and deltas reconcile through two epochs: a delta invalidates any
-  // read in flight (the file moved under it — its snapshot is stale, and
-  // applying it would erase the merged line), and the read re-runs instead;
-  // a newer load supersedes an older one's response. Without this, a GET
-  // landing after an append frame would wipe the merged lines.
-  const requestRef = useRef(0);
-  const frameRef = useRef(0);
   const [watchAttempt, superviseWatch] = useWatchRecovery(NOTEBOOK_LIVENESS_EVENTS);
-
-  const load = useCallback(async () => {
-    for (;;) {
-      const requestId = ++requestRef.current;
-      const epoch = frameRef.current;
-      setLoading(true);
-      try {
-        const response = await fetch(`/api/notebook?cwd=${encodeURIComponent(cwd)}`);
+  // Loads and deltas reconcile in the controller (lib/notebook-live.ts,
+  // pinned at that seam): a delta invalidates any read in flight — the file
+  // moved under it, its snapshot is stale, and applying it would erase the
+  // merged line — so the read re-runs instead; a newer load supersedes an
+  // older one's response. Without this, a GET landing after an append
+  // frame would wipe the merged lines.
+  const live = useMemo(() => createNotebookLive(
+    {
+      cwd,
+      fetchSnapshot: async (projectRoot) => {
+        const response = await fetch(`/api/notebook?cwd=${encodeURIComponent(projectRoot)}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const body = await response.json() as { notebook: NotebookViewModel | null; lines?: unknown };
-        if (requestId !== requestRef.current) return; // a newer load supersedes this one
-        if (epoch !== frameRef.current) continue; // a delta raced the read: the file moved, read again
-        linesRef.current = Array.isArray(body.lines) ? (body.lines as string[]) : [];
-        setNotebook(body.notebook ?? null);
+        return (await response.json()) as { notebook: NotebookViewModel | null; lines: unknown };
+      },
+    },
+    {
+      onLoading: setLoading,
+      onSnapshot: (snapshot) => {
+        linesRef.current = snapshot.lines;
+        setNotebook(snapshot.notebook);
         setFailed(false);
-        return;
-      } catch {
-        if (requestId === requestRef.current) {
-          setNotebook(null);
-          setFailed(true);
-        }
-        return;
-      } finally {
-        if (requestId === requestRef.current) setLoading(false);
-      }
-    }
-  }, [cwd]);
+      },
+      onDelta: (lines) => {
+        linesRef.current.push(...lines);
+        setNotebook(notebookViewModel(`${linesRef.current.join("\n")}\n`));
+      },
+      onError: () => {
+        setNotebook(null);
+        setFailed(true);
+      },
+    },
+  ), [cwd]);
 
   useEffect(() => {
     setExpanded(new Set());
-    void load();
-  }, [load]);
+    live.load().catch(() => { /* the host already drew the failure */ });
+  }, [live]);
 
   // The live tail (ticket #4): the stream's deltas are the appended lines'
   // bytes — the pane merges them into its buffer and re-derives, whichever
@@ -239,26 +238,22 @@ export function NotebookPanel({ cwd }: Props) {
       try {
         const data = JSON.parse((event as MessageEvent).data) as { lines?: unknown };
         if (!Array.isArray(data.lines)) return;
-        const lines = data.lines.filter((line): line is string => typeof line === "string");
-        if (lines.length === 0) return;
-        frameRef.current += 1; // any read in flight just went stale; it re-runs
-        linesRef.current.push(...lines);
-        setNotebook(notebookViewModel(`${linesRef.current.join("\n")}\n`));
+        live.delta(data.lines);
       } catch {
         // a malformed frame is no delta
       }
     });
     es.addEventListener("connected", () => {
-      void load();
+      live.load().catch(() => { /* the host already drew the failure */ });
     });
     es.addEventListener("reset", () => {
-      void load();
+      live.load().catch(() => { /* the host already drew the failure */ });
     });
     return () => {
       es.close();
       stopSupervising();
     };
-  }, [cwd, watchAttempt, superviseWatch, load]);
+  }, [cwd, watchAttempt, superviseWatch, live]);
 
   const toggleEvidence = useCallback((key: string) => {
     setExpanded((current) => {
@@ -276,7 +271,7 @@ export function NotebookPanel({ cwd }: Props) {
       loading={loading}
       expanded={expanded}
       onToggleEvidence={toggleEvidence}
-      onRefresh={() => void load()}
+      onRefresh={() => { live.load().catch(() => { /* the host already drew the failure */ }); }}
       t={t}
     />
   );
