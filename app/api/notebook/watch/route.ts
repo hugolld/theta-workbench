@@ -185,7 +185,15 @@ export async function GET(req: Request) {
               if (!nowExists) return;
               try { watcher.close(); } catch { /* already closed */ }
               watcher = null;
-              armThetaWatcher();
+              // `.theta` can vanish again between the stat above and the
+              // watch below: a throw here must not strand the stream
+              // watcher-less with a live heartbeat — the client's
+              // watchdog only ever sees pings, so it would not reopen.
+              try {
+                armThetaWatcher();
+              } catch {
+                cleanup();
+              }
             })();
           });
         }
