@@ -11,6 +11,12 @@
  * segment without its newline is a torn write in flight — it stays
  * invisible until the write completes. Pure and JSON-shaped: the API
  * route serves it and the pane component draws it.
+ *
+ * Ticket #4 adds the live tail: the file's complete lines as raw bytes
+ * (`notebookLines`, the pane's buffer and the GET route's handover) and
+ * the appended lines between two reads (`newNotebookLines`, the watch
+ * route's deltas). Both are byte-honest — malformed lines and duplicates
+ * ride along — because rendering's gate above, not the tail, judges them.
  */
 
 /** The evidence grades (theta-agent GLOSSARY): the trust mark on a source, never on judgment. */
@@ -220,6 +226,39 @@ export function parseProvenanceEntry(line: string): NotebookEntry | undefined {
   if (entryType === "observation" && !isGrade(entry.grade)) return undefined;
   if (entryType === "confidence" && !isHypRef(entry.hypothesis)) return undefined;
   return { ...(entry as unknown as NotebookEntry) };
+}
+
+/**
+ * The file's complete lines as raw bytes — the trailing segment without
+ * its newline (a torn write in flight) held back. Malformed lines and
+ * duplicates ride along: this is the pane's live buffer and the GET
+ * route's handover, and the render gate judges the bytes, not the tail.
+ */
+export function notebookLines(content: string): string[] {
+  const lines = content.split("\n");
+  lines.pop();
+  return lines;
+}
+
+/**
+ * The complete lines appended since a previous read of the same file —
+ * `[]` when nothing was appended. A tail torn off `previous` completes
+ * here (its bytes plus the appended segment form the line); a tail torn
+ * off `current` stays held. `null` when `current` is not an append of
+ * `previous` (shrunk, rewritten, emptied): the caller resets its picture
+ * of the file.
+ */
+export function newNotebookLines(previous: string, current: string): string[] | null {
+  if (!current.startsWith(previous)) return null;
+  if (current === previous) return [];
+  // The segment from `previous`'s last newline: a torn tail of `previous`
+  // rides at its front and completes there, the rest is appended fresh —
+  // so the split's elements are already the appended lines, byte-exact.
+  const tail = previous.endsWith("\n") ? "" : previous.slice(previous.lastIndexOf("\n") + 1);
+  const segment = current.slice(previous.length - tail.length);
+  const lines = segment.split("\n");
+  lines.pop(); // `current`'s own torn tail stays invisible
+  return lines;
 }
 
 /** The grade totals across what renders — every evidence item's grade plus the observations' own. */
