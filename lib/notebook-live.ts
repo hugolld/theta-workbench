@@ -32,6 +32,14 @@ export interface NotebookLiveHost {
 }
 
 export interface NotebookLiveDeps {
+  /**
+   * The project root, read when each read starts — the pane hands one
+   * controller its whole lifetime and supplies the current cwd through a
+   * getter, so a project switch supersedes the previous project's
+   * in-flight read (pinned in lib/notebook-live.test.mjs). Per-cwd
+   * controllers would give each project its own supersession counters and
+   * let an orphaned read apply under the new selection.
+   */
   cwd: string;
   /** The snapshot read. Throws on failure (HTTP status included). */
   fetchSnapshot(cwd: string): Promise<{ notebook: NotebookViewModel | null; lines: unknown }>;

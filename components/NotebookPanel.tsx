@@ -190,10 +190,16 @@ export function NotebookPanel({ cwd }: Props) {
   // moved under it, its snapshot is stale, and applying it would erase the
   // merged line — so the read re-runs instead; a newer load supersedes an
   // older one's response. Without this, a GET landing after an append
-  // frame would wipe the merged lines.
+  // frame would wipe the merged lines. ONE controller for the pane's
+  // lifetime, the cwd supplied through a getter read at each read's start:
+  // per-cwd controllers would carry their own supersession counters, and a
+  // project switch would let the orphaned controller's read apply the old
+  // project's notebook under the new selection.
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
   const live = useMemo(() => createNotebookLive(
     {
-      cwd,
+      get cwd() { return cwdRef.current; },
       fetchSnapshot: async (projectRoot) => {
         const response = await fetch(`/api/notebook?cwd=${encodeURIComponent(projectRoot)}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -216,12 +222,12 @@ export function NotebookPanel({ cwd }: Props) {
         setFailed(true);
       },
     },
-  ), [cwd]);
+  ), []);
 
   useEffect(() => {
     setExpanded(new Set());
     live.load().catch(() => { /* the host already drew the failure */ });
-  }, [live]);
+  }, [cwd, live]);
 
   // The live tail (ticket #4): the stream's deltas are the appended lines'
   // bytes — the pane merges them into its buffer and re-derives, whichever
