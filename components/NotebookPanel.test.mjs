@@ -84,3 +84,23 @@ test("the pane offers no notebook mutation path — refresh is the only action",
   // The evidence toggles carry no submit semantics.
   assert.ok(buttons.slice(1).every((tag) => tag.includes('type="button"')));
 });
+
+test("a non-observation line's grade field renders unbadged — the row badge is the observation's own", () => {
+  // The method entry carries a valid grade field the validator lets pass
+  // (extra fields are the recorder's business): the pane grades only the
+  // observation's own claim and the evidence items, never the stray field.
+  const stray = notebookViewModel([
+    JSON.stringify({ id: "mth-3", type: "method", date: "2026-11-20", text: "Docking screen rerun", grade: "re-executed", evidence: [{ source: "theta-compute", job_id: "900002", retrieved: "2026-11-20", grade: "re-executed" }] }),
+    JSON.stringify({ id: "obs-2", type: "observation", date: "2026-11-20", text: "Pose reproduced", grade: "asserted", evidence: [{ source: "pubmed", retrieved: "2026-11-20", grade: "cross-checked" }] }),
+  ].join("\n") + "\n");
+  const html = render({ notebook: stray });
+  // The header totals count what the grammar grades — the method's own
+  // field joins neither.
+  assert.match(html, /Theta notebook - 2 entries - grades: 1 asserted, 1 cross-checked, 1 re-executed/);
+  // The observation's own grade is a badge, the evidence badges stay, and
+  // the method's stray grade renders unbadged — exactly one re-executed
+  // badge in the whole pane (its evidence item's).
+  assert.equal((html.match(/data-grade="re-executed"/g) ?? []).length, 1);
+  assert.equal((html.match(/data-grade="asserted"/g) ?? []).length, 1);
+  assert.equal((html.match(/data-grade="cross-checked"/g) ?? []).length, 1);
+});
