@@ -261,14 +261,20 @@ export function newNotebookLines(previous: string, current: string): string[] | 
   return lines;
 }
 
-/** The grade totals across what renders — every evidence item's grade plus the observations' own. */
+/**
+ * The grade totals across what renders — every evidence item's grade plus
+ * the observations' own (an observation is itself a source claim), the
+ * grammar's own rule (theta-agent `extensions/notebook-command.ts`). A
+ * grade on any other entry type is an extra field the recorder let ride:
+ * it never joins the header.
+ */
 function gradeTotals(entries: NotebookEntryView[]): NotebookGradeTotal[] {
   const counts = new Map<EvidenceGrade, number>();
   const count = (grade: EvidenceGrade): void => {
     counts.set(grade, (counts.get(grade) ?? 0) + 1);
   };
   for (const entry of entries) {
-    if (entry.grade !== undefined) count(entry.grade);
+    if (entry.type === "observation" && entry.grade !== undefined) count(entry.grade);
     for (const item of entry.evidence) count(item.grade);
   }
   return GRADES.filter((grade) => (counts.get(grade) ?? 0) > 0).map((grade) => ({
@@ -289,8 +295,7 @@ function rowText(entry: NotebookEntry): string {
  * parses, in file order, deduped by line bytes, under the grammar header.
  */
 export function notebookViewModel(content: string): NotebookViewModel {
-  const lines = content.split("\n");
-  lines.pop(); // the trailing segment without its newline is a torn write in flight
+  const lines = notebookLines(content);
   const seen = new Set<string>();
   const entries: NotebookEntryView[] = [];
   for (const line of lines) {
@@ -311,7 +316,10 @@ export function notebookViewModel(content: string): NotebookViewModel {
       date: parsed.date,
       text: parsed.text,
       rowText: rowText(parsed),
-      ...(parsed.grade !== undefined && { grade: parsed.grade }),
+      // The row badge is the observation's own grade — the grammar's rule;
+      // a grade field on any other type is a stray extra field that never
+      // rides the view (and so never badges in the pane).
+      ...(parsed.type === "observation" && parsed.grade !== undefined && { grade: parsed.grade }),
       ...(parsed.hypothesis !== undefined && { hypothesis: parsed.hypothesis }),
       evidence,
     });

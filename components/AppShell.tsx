@@ -113,6 +113,26 @@ function lastNotebookTabId(tabs: readonly { cwd: string }[]): string | null {
   return last ? `notebook:${last.cwd}` : null;
 }
 
+/**
+ * The tab that takes the active slot when a panel tab closes, and — as
+ * null — the all-empty check that closes the right panel with its last
+ * tab: the last file tab, else the last terminal, else the last notebook
+ * pane, else the last sub-agent tab. Every list is already minus the tab
+ * being closed, so all three close branches share one home for the chain
+ * and for the emptiness it decides.
+ */
+function nextPanelTabId(
+  fileTabs: readonly { id: string }[],
+  terminalTabs: readonly { id: string }[],
+  notebookTabs: readonly { cwd: string }[],
+  agentTabs: readonly { sessionId: string }[],
+): string | null {
+  return fileTabs.at(-1)?.id
+    ?? terminalTabs.at(-1)?.id
+    ?? lastNotebookTabId(notebookTabs)
+    ?? lastAgentTabId(agentTabs);
+}
+
 export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -1479,33 +1499,24 @@ export function AppShell() {
     if (tabId.startsWith("agent:")) {
       const remainingAgents = agentTabs.filter((tab) => `agent:${tab.sessionId}` !== tabId);
       setAgentTabs(remainingAgents);
-      setActiveFileTabId((cur) => {
-        if (cur !== tabId) return cur;
-        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastNotebookTabId(notebookTabs) ?? lastAgentTabId(remainingAgents);
-      });
-      if (fileTabs.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0 && notebookTabs.length === 0) setRightPanelOpen(false);
+      const nextTab = nextPanelTabId(fileTabs, terminalTabs, notebookTabs, remainingAgents);
+      if (nextTab === null) setRightPanelOpen(false);
+      setActiveFileTabId((cur) => cur !== tabId ? cur : nextTab);
       return;
     }
     if (tabId.startsWith("notebook:")) {
       const remainingNotebooks = notebookTabs.filter((tab) => `notebook:${tab.cwd}` !== tabId);
       setNotebookTabs(remainingNotebooks);
-      setActiveFileTabId((cur) => {
-        if (cur !== tabId) return cur;
-        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastNotebookTabId(remainingNotebooks) ?? lastAgentTabId(agentTabs);
-      });
-      if (fileTabs.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0 && remainingNotebooks.length === 0) setRightPanelOpen(false);
+      const nextTab = nextPanelTabId(fileTabs, terminalTabs, remainingNotebooks, agentTabs);
+      if (nextTab === null) setRightPanelOpen(false);
+      setActiveFileTabId((cur) => cur !== tabId ? cur : nextTab);
       return;
     }
-    setFileTabs((prev) => {
-      const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0 && notebookTabs.length === 0) setRightPanelOpen(false);
-      return next;
-    });
-    setActiveFileTabId((cur) => {
-      if (cur !== tabId) return cur;
-      const remaining = fileTabs.filter((t) => t.id !== tabId);
-      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastNotebookTabId(notebookTabs) ?? lastAgentTabId(agentTabs);
-    });
+    const remainingFiles = fileTabs.filter((t) => t.id !== tabId);
+    const nextTab = nextPanelTabId(remainingFiles, terminalTabs, notebookTabs, agentTabs);
+    if (nextTab === null) setRightPanelOpen(false);
+    setFileTabs((prev) => prev.filter((t) => t.id !== tabId));
+    setActiveFileTabId((cur) => cur !== tabId ? cur : nextTab);
   }, [fileTabs, terminalTabs, agentTabs, notebookTabs]);
 
   // An extension's ctx.shutdown() ended the session's runtime, as pi quits: leave it the

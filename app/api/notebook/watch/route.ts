@@ -55,10 +55,23 @@ export async function GET(req: Request) {
   // The debug panel's count of open watches (the files route's own); released
   // when the watcher fails or the client cancels or goes.
   let releaseWatch: (() => void) | null = null;
+  // One teardown, hoisted above `start` so `cancel` shares it instead of
+  // re-implementing it: heartbeat, watcher, watch-count seat. Idempotent —
+  // every handle clears its own slot.
+  let closed = false;
+  const teardown = () => {
+    if (heartbeat !== null) clearInterval(heartbeat);
+    heartbeat = null;
+    if (watcher !== null) {
+      try { watcher.close(); } catch { /* already closed */ }
+      watcher = null;
+    }
+    releaseWatch?.();
+    releaseWatch = null;
+  };
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const encoder = new TextEncoder();
-      let closed = false;
       const send = (eventName: string, data: Record<string, unknown>) => {
         if (closed) return;
         try {
@@ -70,14 +83,7 @@ export async function GET(req: Request) {
       const cleanup = () => {
         if (closed) return;
         closed = true;
-        if (heartbeat !== null) clearInterval(heartbeat);
-        heartbeat = null;
-        if (watcher !== null) {
-          try { watcher.close(); } catch { /* already closed */ }
-          watcher = null;
-        }
-        releaseWatch?.();
-        releaseWatch = null;
+        teardown();
         try { controller.close(); } catch { /* already closed */ }
       };
 
@@ -218,13 +224,10 @@ export async function GET(req: Request) {
       send("connected", {});
     },
     cancel() {
-      if (heartbeat !== null) clearInterval(heartbeat);
-      if (watcher !== null) {
-        try { watcher.close(); } catch { /* already closed */ }
-        watcher = null;
-      }
-      releaseWatch?.();
-      releaseWatch = null;
+      // The client went: the shared teardown, and `closed` so start()'s
+      // in-flight callbacks never enqueue onto the cancelled controller.
+      closed = true;
+      teardown();
     },
   });
   return new Response(stream, {
