@@ -1,0 +1,42 @@
+name: Windows smoke
+
+# Ticket #6 (M7b-1): the backend boots and serves a session on a Windows
+# host — plain Node, no WSL. The Windows host of record is this runner.
+# The job is a smoke, not the suite: install, build once, boot the
+# production server, and assert it serves (scripts/windows-smoke.mjs —
+# platform-neutral, proven locally on macOS; this run is the Windows
+# evidence). The full lint/type/test/e2e suite stays on CI (ubuntu).
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+      - run: node scripts/windows-smoke.mjs
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: windows-smoke-failure
+          path: test-results/windows-smoke/
+          retention-days: 7
