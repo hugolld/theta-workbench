@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { readFile, stat } from "fs/promises";
-import { isAbsolute, join, resolve } from "path";
 import { getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed } from "@/lib/file-access";
+import { notebookTargetFromCwd } from "@/lib/notebook-path";
 import { notebookLines, notebookViewModel } from "@/lib/notebook";
 
 export const dynamic = "force-dynamic";
@@ -21,12 +21,11 @@ export const dynamic = "force-dynamic";
 // the pane carries the absence wording. Read-only by construction: this
 // route has no mutation method.
 export async function GET(req: Request) {
-  const cwd = new URL(req.url).searchParams.get("cwd")?.trim() ?? "";
-  if (!cwd) {
+  const target = notebookTargetFromCwd(new URL(req.url).searchParams.get("cwd"));
+  if (!target) {
     return NextResponse.json({ error: "cwd is required" }, { status: 400 });
   }
-  const projectRoot = isAbsolute(cwd) ? cwd : resolve(cwd);
-  const notebookPath = join(projectRoot, ".theta", "notebook.jsonl");
+  const { notebookPath } = target;
   const allowedRoots = await getAllowedFileRoots();
   if (!isFilePathAllowed(notebookPath, allowedRoots)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
