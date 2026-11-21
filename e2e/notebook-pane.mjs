@@ -5,7 +5,7 @@
 // line renders once (line bytes are the identity); a second tab on the
 // same project is tolerated and stays live.
 import assert from "node:assert/strict";
-import { mkdirSync, realpathSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
 import { join } from "path";
 import { showSidebarSessions } from "./sidebar.mjs";
 
@@ -125,6 +125,23 @@ export async function checkNotebookPane({ browser, base, artifacts, fixture, api
     await paneTwo.getByText("E2E third replicate binds").waitFor();
     assert.equal(await page.evaluate(() => window.e2eNoReload), true);
     assert.equal(await second.evaluate(() => window.e2eNoReload), true, "neither pane may reload");
+
+    // A deleted-and-recreated `.theta` kills the watched inode: the stream
+    // closes (macOS keeps the watcher alive but deaf, so the route checks),
+    // the browser reconnects onto the fresh stream, and the `connected`
+    // re-read brings the lines that rode in meanwhile — in both panes,
+    // still without a reload.
+    const away = appendedObservation("obs-4", "E2E appended around a notebook rebuild");
+    const rebuilt = [...entries.map((entry) => JSON.stringify(entry)), live, third, away];
+    const thetaDir = join(fixture.project, ".theta");
+    rmSync(thetaDir, { recursive: true, force: true });
+    mkdirSync(thetaDir, { recursive: true });
+    writeFileSync(fixture.notebook, `${rebuilt.join("\n")}\n`);
+    await pane.getByText("E2E appended around a notebook rebuild").waitFor({ timeout: 30_000 });
+    await paneTwo.getByText("E2E appended around a notebook rebuild").waitFor({ timeout: 30_000 });
+    await pane.locator(".notebook-heading").getByText(/^Theta notebook - 8 entries /).waitFor();
+    assert.equal(await page.evaluate(() => window.e2eNoReload), true);
+    assert.equal(await second.evaluate(() => window.e2eNoReload), true, "reconciliation never reloads");
 
     assert.deepEqual(errors, [], "browser errors in the notebook pane check");
     console.log("PASS: notebook pane renders whole, appends live without reload, skips malformed lines, dedupes re-sent lines, and holds two live tabs");

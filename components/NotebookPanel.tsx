@@ -183,22 +183,39 @@ export function NotebookPanel({ cwd }: Props) {
   // the picture it amends. A failed read stays failed until a load
   // succeeds — a delta never papers over it.
   const linesRef = useRef<string[]>([]);
+  // Loads and deltas reconcile through two epochs: a delta invalidates any
+  // read in flight (the file moved under it — its snapshot is stale, and
+  // applying it would erase the merged line), and the read re-runs instead;
+  // a newer load supersedes an older one's response. Without this, a GET
+  // landing after an append frame would wipe the merged lines.
+  const requestRef = useRef(0);
+  const frameRef = useRef(0);
   const [watchAttempt, superviseWatch] = useWatchRecovery(NOTEBOOK_LIVENESS_EVENTS);
 
   const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/notebook?cwd=${encodeURIComponent(cwd)}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json() as { notebook: NotebookViewModel | null; lines?: string[] };
-      linesRef.current = Array.isArray(body.lines) ? body.lines : [];
-      setNotebook(body.notebook ?? null);
-      setFailed(false);
-    } catch {
-      setNotebook(null);
-      setFailed(true);
-    } finally {
-      setLoading(false);
+    for (;;) {
+      const requestId = ++requestRef.current;
+      const epoch = frameRef.current;
+      setLoading(true);
+      try {
+        const response = await fetch(`/api/notebook?cwd=${encodeURIComponent(cwd)}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const body = await response.json() as { notebook: NotebookViewModel | null; lines?: unknown };
+        if (requestId !== requestRef.current) return; // a newer load supersedes this one
+        if (epoch !== frameRef.current) continue; // a delta raced the read: the file moved, read again
+        linesRef.current = Array.isArray(body.lines) ? (body.lines as string[]) : [];
+        setNotebook(body.notebook ?? null);
+        setFailed(false);
+        return;
+      } catch {
+        if (requestId === requestRef.current) {
+          setNotebook(null);
+          setFailed(true);
+        }
+        return;
+      } finally {
+        if (requestId === requestRef.current) setLoading(false);
+      }
     }
   }, [cwd]);
 
@@ -209,10 +226,12 @@ export function NotebookPanel({ cwd }: Props) {
 
   // The live tail (ticket #4): the stream's deltas are the appended lines'
   // bytes — the pane merges them into its buffer and re-derives, whichever
-  // session appended them, with no reload. Reconnection (sleep, a dropped
-  // stream) re-opens the watch and the `connected`-seeded picture is
-  // reconciled by the merge: line bytes are the identity, so a line the
-  // pane already holds renders once however often it is re-sent.
+  // session appended them, with no reload. Line bytes are the identity, so
+  // a line the pane already holds renders once however often it is
+  // re-sent. `connected` (the open, and every reconnect after sleep or a
+  // dropped stream) and `reset` (the file rewritten under the stream) read
+  // the whole notebook again: whatever rode in while the stream was gone
+  // or unreadable reconciles there, never through a missed delta.
   useEffect(() => {
     const es = new EventSource(`/api/notebook/watch?cwd=${encodeURIComponent(cwd)}`);
     const stopSupervising = superviseWatch(es);
@@ -222,11 +241,15 @@ export function NotebookPanel({ cwd }: Props) {
         if (!Array.isArray(data.lines)) return;
         const lines = data.lines.filter((line): line is string => typeof line === "string");
         if (lines.length === 0) return;
+        frameRef.current += 1; // any read in flight just went stale; it re-runs
         linesRef.current.push(...lines);
         setNotebook(notebookViewModel(`${linesRef.current.join("\n")}\n`));
       } catch {
         // a malformed frame is no delta
       }
+    });
+    es.addEventListener("connected", () => {
+      void load();
     });
     es.addEventListener("reset", () => {
       void load();

@@ -96,6 +96,14 @@ async function sse(response) {
       await delay(windowMs);
       assert.deepEqual(frames.slice(before), [], "no frames expected in this window");
     },
+    async waitClosed(timeoutMs = 10_000) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (closed) return;
+        await delay(25);
+      }
+      assert.fail(`stream stayed open for ${timeoutMs}ms`);
+    },
     stop: () => { void reader.cancel().catch(() => {}); return pump; },
   };
 }
@@ -163,6 +171,20 @@ test("a rewritten file sends reset, and the pane's picture starts over", async (
     await s.waitFor("connected");
     fs.writeFileSync(notebookPath, `${observation("obs-4", "Rewritten trail")}\n`);
     await s.waitFor("reset");
+  } finally {
+    s.stop();
+  }
+});
+
+test("a deleted watched directory closes the stream, so the client reconnects onto the new one", async () => {
+  const s = await sse(await request(project));
+  try {
+    await s.waitFor("connected");
+    fs.rmSync(path.join(project, ".theta"), { recursive: true, force: true });
+    // The watched inode is dead — inotify errors, FSEvents keeps firing at
+    // the ghost. Either way the stream must end: the browser's EventSource
+    // reconnects, and the fresh stream re-arms on what now exists.
+    await s.waitClosed();
   } finally {
     s.stop();
   }
