@@ -59,6 +59,20 @@ test("a project without a notebook is an absence, never an error", async () => {
   assert.deepEqual(await response.json(), { notebook: null });
 });
 
+test("a symlinked notebook inside an allowed root cannot name a file outside it", async () => {
+  const linked = path.join(root, "linked-project");
+  fs.mkdirSync(path.join(linked, ".theta"), { recursive: true });
+  const outside = path.join(root, "outside", "secret-notebook.jsonl");
+  fs.mkdirSync(path.dirname(outside), { recursive: true });
+  fs.writeFileSync(outside, JSON.stringify({ id: "mth-1", type: "method", date: "2026-11-18", text: "smuggled" }));
+  fs.symlinkSync(outside, path.join(linked, ".theta", "notebook.jsonl"));
+  allowFileRoot(linked);
+  const response = await request(linked);
+  assert.equal(response.status, 403);
+  const body = await response.json();
+  assert.equal(body.error, "Access denied");
+});
+
 test("a cwd outside the allowed roots is refused", async () => {
   const response = await request(path.join(root, "never-allowed"));
   assert.equal(response.status, 403);

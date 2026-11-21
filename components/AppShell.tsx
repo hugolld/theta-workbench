@@ -107,6 +107,12 @@ function lastAgentTabId(tabs: readonly { sessionId: string }[]): string | null {
   return last ? `agent:${last.sessionId}` : null;
 }
 
+/** Panel tab id of the last notebook pane, or null when there is none (M7b-1 #3). */
+function lastNotebookTabId(tabs: readonly { cwd: string }[]): string | null {
+  const last = tabs.at(-1);
+  return last ? `notebook:${last.cwd}` : null;
+}
+
 export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -1475,9 +1481,9 @@ export function AppShell() {
       setAgentTabs(remainingAgents);
       setActiveFileTabId((cur) => {
         if (cur !== tabId) return cur;
-        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(remainingAgents);
+        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastNotebookTabId(notebookTabs) ?? lastAgentTabId(remainingAgents);
       });
-      if (fileTabs.length === 0 && terminalTabs.length === 0 && remainingAgents.length === 0) setRightPanelOpen(false);
+      if (fileTabs.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0 && notebookTabs.length === 0) setRightPanelOpen(false);
       return;
     }
     if (tabId.startsWith("notebook:")) {
@@ -1485,20 +1491,20 @@ export function AppShell() {
       setNotebookTabs(remainingNotebooks);
       setActiveFileTabId((cur) => {
         if (cur !== tabId) return cur;
-        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(agentTabs);
+        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastNotebookTabId(remainingNotebooks) ?? lastAgentTabId(agentTabs);
       });
       if (fileTabs.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0 && remainingNotebooks.length === 0) setRightPanelOpen(false);
       return;
     }
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0) setRightPanelOpen(false);
+      if (next.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0 && notebookTabs.length === 0) setRightPanelOpen(false);
       return next;
     });
     setActiveFileTabId((cur) => {
       if (cur !== tabId) return cur;
       const remaining = fileTabs.filter((t) => t.id !== tabId);
-      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(agentTabs);
+      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastNotebookTabId(notebookTabs) ?? lastAgentTabId(agentTabs);
     });
   }, [fileTabs, terminalTabs, agentTabs, notebookTabs]);
 

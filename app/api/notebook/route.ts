@@ -1,17 +1,22 @@
 import { NextResponse } from "next/server";
-import { readFile } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import { isAbsolute, join, resolve } from "path";
-import { getAllowedFileRoots, isFilePathAllowed } from "@/lib/file-access";
+import { getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed } from "@/lib/file-access";
 import { notebookViewModel } from "@/lib/notebook";
+
+export const dynamic = "force-dynamic";
 
 // GET /api/notebook?cwd=<project root>
 // The research project's notebook, read once and served as the pane's
 // view-model (M7b-1 ticket #3): the pane draws it in theta-agent's
 // `/notebook` grammar — lib/notebook.ts is the grammar's one home here.
-// The path rides the fork's allowed-roots guard like any file surface.
-// A project without a notebook (or an unreadable one) is an absence —
-// `{ notebook: null }`, never an error; the pane carries the absence
-// wording. Read-only by construction: this route has no mutation method.
+// The path rides the fork's allowed-roots guard like any file surface:
+// authorized lexically first, then — the file existing — through the
+// symlink-resolving check, so a link inside an allowed root cannot name
+// the notebook outside it. A project without a notebook (or an
+// unreadable one) is an absence — `{ notebook: null }`, never an error;
+// the pane carries the absence wording. Read-only by construction: this
+// route has no mutation method.
 export async function GET(req: Request) {
   const cwd = new URL(req.url).searchParams.get("cwd")?.trim() ?? "";
   if (!cwd) {
@@ -19,7 +24,16 @@ export async function GET(req: Request) {
   }
   const projectRoot = isAbsolute(cwd) ? cwd : resolve(cwd);
   const notebookPath = join(projectRoot, ".theta", "notebook.jsonl");
-  if (!isFilePathAllowed(notebookPath, await getAllowedFileRoots())) {
+  const allowedRoots = await getAllowedFileRoots();
+  if (!isFilePathAllowed(notebookPath, allowedRoots)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+  try {
+    await stat(notebookPath);
+  } catch {
+    return NextResponse.json({ notebook: null });
+  }
+  if (!isExistingFilePathAllowed(notebookPath, allowedRoots)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
   let content: string;
