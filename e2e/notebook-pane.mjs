@@ -94,21 +94,21 @@ export async function checkNotebookPane({ browser, base, artifacts, fixture, api
     const live = appendedObservation("obs-2", "E2E second replicate binds");
     appendFileSync(fixture.notebook, `${live}\n`);
     await pane.getByText("E2E second replicate binds").waitFor();
-    await pane.locator(".notebook-heading").getByText("Theta notebook - 6 entries", { exact: true }).waitFor();
+    await pane.locator(".notebook-heading").getByText(/^Theta notebook - 6 entries /).waitFor();
     assert.equal(await page.evaluate(() => window.e2eNoReload), true, "the live append must not reload the pane");
 
     // A re-sent line renders once — line bytes are the identity.
     appendFileSync(fixture.notebook, `${live}\n`);
     await page.waitForTimeout(1_000);
     assert.equal(await pane.getByText("E2E second replicate binds").count(), 1, "a re-sent line must not render twice");
-    await pane.locator(".notebook-heading").getByText("Theta notebook - 6 entries", { exact: true }).waitFor();
+    await pane.locator(".notebook-heading").getByText(/^Theta notebook - 6 entries /).waitFor();
 
     // A malformed append never renders, and the trail around it stands.
     appendFileSync(fixture.notebook, "not json at all\n");
     await page.waitForTimeout(1_000);
     assert.equal(await pane.getByText("not json at all").count(), 0, "a malformed appended line must never render");
     await pane.getByText("E2E second replicate binds").waitFor();
-    await pane.locator(".notebook-heading").getByText("Theta notebook - 6 entries", { exact: true }).waitFor();
+    await pane.locator(".notebook-heading").getByText(/^Theta notebook - 6 entries /).waitFor();
     await page.screenshot({ path: join(artifacts, "notebook-pane-live.png") });
 
     // A second tab on the same project: tolerated, and every open pane
