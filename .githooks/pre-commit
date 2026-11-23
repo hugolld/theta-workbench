@@ -1,0 +1,53 @@
+#!/bin/bash
+# Local guardrail for commits, vendored from theta-agent's
+# .githooks/pre-commit (the M7b-1 strike ceremony, ticket #2): block commits
+# on red lint or red typecheck, and warn on a stale staged snapshot.
+#
+# The lanes this hook runs: `npm run lint` (~20s) and
+# `npx --no-install tsc --noEmit` (~10s) are hermetic and green here. The
+# full test suite is NOT run by default: several of its tests read this
+# machine's own state (~/.pi/agent/models.json, the npm registry) or
+# resolve node_modules from the checkout root, so they red on a host whose
+# pi state differs and inside a nested worktree — a red-at-baseline gate is
+# noise, not a guardrail. The suite still binds before any merge: ci.yml
+# runs lint, tsc, the suite, and e2e on every pull request, and
+# scripts/check-strike.mjs refuses a ready PR whose checks are not all
+# green. Set THETA_PRECOMMIT_TEST=1 to run the suite locally anyway.
+#
+# Unset the env git exports to hooks — a suite's fixture repos must not
+# commit into this repository. A lane's failing head must fail the hook —
+# a summary must never mask a red lane.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_OBJECT_DIRECTORY
+set -o pipefail
+# The stale-stage warning (scripts/stale-stage.mjs): the hook checks the
+# working tree while the commit takes the index — name any file whose
+# staged snapshot predates its working-tree content. Warning only: a
+# git add -p partial-hunk commit leaves this state on purpose.
+node scripts/stale-stage.mjs
+
+npm run lint --silent
+lint_status=$?
+if [ "$lint_status" -ne 0 ]; then
+	echo "pre-commit: npm run lint failed — run it for the detail" >&2
+	exit "$lint_status"
+fi
+
+npx --no-install tsc --noEmit
+tsc_status=$?
+if [ "$tsc_status" -ne 0 ]; then
+	echo "pre-commit: tsc --noEmit failed — run it for the detail" >&2
+	exit "$tsc_status"
+fi
+
+if [ "${THETA_PRECOMMIT_TEST:-0}" = "1" ]; then
+	out=$(npm test --silent)
+	status=$?
+	printf '%s\n' "$out" | tail -n 12
+	if [ "$status" -ne 0 ]; then
+		# The hook tests the working tree, not the staged index: a
+		# partially-staged commit is refused and its cause re-derived from
+		# scratch — name it where the failure lands.
+		echo "pre-commit: the hook tests the working tree, not the staged index — an unstaged red file refuses a commit whose staged content is green" >&2
+	fi
+	exit "$status"
+fi

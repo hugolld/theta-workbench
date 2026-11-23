@@ -4,6 +4,9 @@ import typescript from "eslint-config-next/typescript";
 const eslintConfig = [
   // demo/ is a separate Next.js project with its own lint config.
   { ignores: ["demo/**"] },
+  // Strike worktrees live under .worktrees/ inside the clone; their dev
+  // caches must not enter this tree's lint.
+  { ignores: [".worktrees/**"] },
   ...coreWebVitals,
   ...typescript,
   {
